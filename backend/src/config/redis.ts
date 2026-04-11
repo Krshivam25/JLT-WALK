@@ -1,7 +1,7 @@
-import Redis from 'ioredis';
+import IORedis from 'ioredis';
 import { config } from './index.js';
 
-let redis: Redis | null = null;
+let redis: any = null;
 let redisAvailable = false;
 
 export function initRedis(): void {
@@ -10,9 +10,10 @@ export function initRedis(): void {
     return;
   }
   try {
-    redis = new Redis(config.redisUrl, {
+    const RedisConstructor = (IORedis as any).default || IORedis;
+    redis = new RedisConstructor(config.redisUrl, {
       maxRetriesPerRequest: 1,
-      retryStrategy(times) {
+      retryStrategy(times: number) {
         if (times > 3) return null;
         return Math.min(times * 200, 2000);
       },
@@ -22,7 +23,7 @@ export function initRedis(): void {
       redisAvailable = true;
       console.log('Redis connected');
     });
-    redis.on('error', (err) => {
+    redis.on('error', (err: Error) => {
       redisAvailable = false;
       console.warn('Redis error:', err.message);
     });
@@ -37,7 +38,7 @@ export function initRedis(): void {
   }
 }
 
-export function getRedis(): Redis | null {
+export function getRedis(): any {
   return redisAvailable ? redis : null;
 }
 
@@ -56,9 +57,7 @@ export async function cacheSet(key: string, value: string, ttlSeconds = 300): Pr
   if (!r) return;
   try {
     await r.set(key, value, 'EX', ttlSeconds);
-  } catch {
-    // no-op
-  }
+  } catch {}
 }
 
 export async function cacheDel(key: string): Promise<void> {
@@ -66,7 +65,5 @@ export async function cacheDel(key: string): Promise<void> {
   if (!r) return;
   try {
     await r.del(key);
-  } catch {
-    // no-op
-  }
+  } catch {}
 }
