@@ -22,7 +22,7 @@ export default function ProfileScreen() {
   const [avoidStairs, setAvoidStairs] = useState(false);
   const [preferShade, setPreferShade] = useState(false);
   const [backgroundTracking, setBackgroundTracking] = useState(false);
-  const [walkTracking, setWalkTracking] = useState(false);
+  const [walkTracking, setWalkTracking] = useState(true); // default ON
   const [sharingLevel, setSharingLevel] = useState<SharingLevel>('private');
   const [trustScore, setTrustScore] = useState(0);
   const [shortcutsAdded, setShortcutsAdded] = useState(0);
@@ -31,17 +31,19 @@ export default function ProfileScreen() {
   useEffect(() => {
     userApi.profile().then(r => {
       const p = r.data;
-      if (p?.preferences) {
-        setAvoidStairs(!!p.preferences.avoid_stairs);
-        setPreferShade(!!p.preferences.prefer_shade);
-      }
+      // API returns 'prefs' not 'preferences'
+      const prefs = p?.prefs || p?.preferences || {};
+      setAvoidStairs(!!prefs.avoid_stairs);
+      setPreferShade(!!prefs.prefer_shade);
+      setBackgroundTracking(!!prefs.background_tracking);
       if (typeof p?.trust_score === 'number') setTrustScore(p.trust_score);
       if (typeof p?.shortcuts_added === 'number') setShortcutsAdded(p.shortcuts_added);
       if (typeof p?.validations_done === 'number') setValidationsDone(p.validations_done);
     }).catch(() => {});
 
+    // Walk tracking defaults to ON (null = never set = enabled)
     AsyncStorage.getItem('walk_tracking_enabled').then(val => {
-      setWalkTracking(val === 'true');
+      setWalkTracking(val === null ? true : val === 'true');
     });
   }, []);
 

@@ -16,7 +16,7 @@ import {
 import MapboxGL from '@rnmapbox/maps';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useLocation, useLocationTracking } from '../hooks/useLocation';
-import { pinsApi, heatmapApi, routeApi, shortcutsApi } from '../services/api';
+import { pinsApi, heatmapApi, routeApi, shortcutsApi, edgesApi } from '../services/api';
 import { Pin, HeatmapCell, Route } from '../types';
 import { colors, spacing, radii, fonts } from '../utils/theme';
 import HeatmapOverlay from '../components/HeatmapOverlay';
@@ -176,7 +176,7 @@ export default function MapScreen() {
   const [pins, setPins] = useState<Pin[]>([]);
   const [heatmapCells, setHeatmapCells] = useState<HeatmapCell[]>([]);
   const [showHeatmap, setShowHeatmap] = useState(false);
-  const [mappedPercent] = useState(93);
+  const [mappedPercent, setMappedPercent] = useState(0);
 
   // Search
   const [activeField, setActiveField] = useState<'from' | 'to' | null>(null);
@@ -228,9 +228,16 @@ export default function MapScreen() {
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // Load pins
+  // Load pins + edge stats
   useEffect(() => {
-    pinsApi.list('25.06,55.13,25.10,55.18').then(res => setPins(res.data.pins || [])).catch(() => {});
+    const bbox = '25.06,55.13,25.10,55.18';
+    pinsApi.list(bbox).then(res => setPins(res.data.pins || [])).catch(() => {});
+    edgesApi.stats(bbox).then(res => {
+      const { total_edges, verified_edges } = res.data;
+      if (total_edges > 0) {
+        setMappedPercent(Math.round((verified_edges / total_edges) * 100));
+      }
+    }).catch(() => {});
   }, []);
 
   // Heatmap
@@ -899,7 +906,7 @@ const styles = StyleSheet.create({
   searchingText: { color: colors.textSecondary, fontSize: fonts.sizes.sm },
 
   // Badges
-  mappedBadge: { position: 'absolute', top: Platform.OS === 'ios' ? 156 : 140, right: 16, backgroundColor: colors.bgCard, borderRadius: radii.md, paddingHorizontal: 10, paddingVertical: 6 },
+  mappedBadge: { position: 'absolute', top: Platform.OS === 'ios' ? 310 : 294, right: 16, backgroundColor: colors.bgCard, borderRadius: radii.md, paddingHorizontal: 10, paddingVertical: 6 },
   mappedText: { color: colors.accent, fontSize: fonts.sizes.xs, fontWeight: '700' },
   recordingBadge: { position: 'absolute', top: Platform.OS === 'ios' ? 156 : 140, right: 16, backgroundColor: colors.bgCard, borderRadius: radii.md, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 6 },
   recordingDotBadge: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.danger },
