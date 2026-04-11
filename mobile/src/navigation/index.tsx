@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors } from '../utils/theme';
 
 import MapScreen from '../screens/MapScreen';
-import MyWalksScreen from '../screens/MyWalksScreen';
+import LeaderboardScreen from '../screens/LeaderboardScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import LoginScreen from '../screens/LoginScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
@@ -52,8 +52,8 @@ export function AppNavigator() {
               let iconName = 'compass';
               if (route.name === 'Explore') {
                 iconName = focused ? 'compass' : 'compass-outline';
-              } else if (route.name === 'My Walks') {
-                iconName = focused ? 'map' : 'map-outline';
+              } else if (route.name === 'Leaderboard') {
+                iconName = focused ? 'podium' : 'podium-outline';
               } else if (route.name === 'Profile') {
                 iconName = focused ? 'person' : 'person-outline';
               }
@@ -70,7 +70,7 @@ export function AppNavigator() {
           })}
         >
           <Tab.Screen name="Explore" component={MapScreen} />
-          <Tab.Screen name="My Walks" component={MyWalksScreen} />
+          <Tab.Screen name="Leaderboard" component={LeaderboardScreen} />
           <Tab.Screen name="Profile" component={ProfileScreen} />
         </Tab.Navigator>
       ) : (

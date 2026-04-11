@@ -15,29 +15,36 @@ export default async function leaderboardRoutes(app: FastifyInstance) {
     if (period === 'week') timeFilter = "AND pe.created_at > NOW() - INTERVAL '7 days'";
     else if (period === 'month') timeFilter = "AND pe.created_at > NOW() - INTERVAL '30 days'";
 
+    // Rank by points + trust_score combined
     const result = await query(
-      `SELECT u.id as user_id, u.email as display_name, COALESCE(SUM(pe.points), 0)::int as points
+      `SELECT u.id as user_id, u.email as display_name,
+              COALESCE(SUM(pe.points), 0)::int as points,
+              u.trust_score,
+              u.shortcuts_added,
+              u.validations_done,
+              (COALESCE(SUM(pe.points), 0) + u.trust_score)::int as score
        FROM users u LEFT JOIN point_events pe ON pe.user_id = u.id ${timeFilter}
-       GROUP BY u.id, u.email HAVING COALESCE(SUM(pe.points), 0) > 0
-       ORDER BY points DESC LIMIT $1`,
+       GROUP BY u.id, u.email, u.trust_score, u.shortcuts_added, u.validations_done
+       HAVING COALESCE(SUM(pe.points), 0) > 0
+       ORDER BY score DESC LIMIT $1`,
       [parseInt(limit)]
     );
 
-    const entries = result.rows.map((r: { user_id: string; display_name: string; points: number }, i: number) => ({
-      rank: i + 1, ...r,
+    const entries = result.rows.map((r: any, i: number) => ({
+      rank: i + 1,
+      user_id: r.user_id,
+      display_name: r.display_name,
+      points: r.points,
+      trust_score: parseFloat(r.trust_score),
+      score: r.score,
+      shortcuts_added: r.shortcuts_added,
+      validations_done: r.validations_done,
     }));
 
     let user_rank = null;
     if (request.userData) {
-      const allResult = await query(
-        `SELECT user_id, rank FROM (
-          SELECT u.id as user_id, ROW_NUMBER() OVER (ORDER BY COALESCE(SUM(pe.points), 0) DESC) as rank
-          FROM users u LEFT JOIN point_events pe ON pe.user_id = u.id ${timeFilter}
-          GROUP BY u.id HAVING COALESCE(SUM(pe.points), 0) > 0
-        ) sub WHERE user_id = $1`,
-        [request.userData.id]
-      );
-      user_rank = allResult.rows[0] ? parseInt(String(allResult.rows[0].rank)) : null;
+      const idx = entries.findIndex((e: any) => e.user_id === request.userData!.id);
+      user_rank = idx >= 0 ? idx + 1 : null;
     }
 
     const response = { entries, total: entries.length, user_rank };
@@ -48,15 +55,20 @@ export default async function leaderboardRoutes(app: FastifyInstance) {
   app.get('/me', { preHandler: [authenticate] }, async (request: FastifyRequest, reply: FastifyReply) => {
     const result = await query(
       `WITH ranked AS (
-        SELECT u.id, u.email as display_name, COALESCE(SUM(pe.points), 0)::int as points,
-               ROW_NUMBER() OVER (ORDER BY COALESCE(SUM(pe.points), 0) DESC) as rank
-        FROM users u LEFT JOIN point_events pe ON pe.user_id = u.id GROUP BY u.id, u.email
+        SELECT u.id, u.email as display_name,
+               COALESCE(SUM(pe.points), 0)::int as points,
+               u.trust_score,
+               u.shortcuts_added,
+               u.validations_done,
+               ROW_NUMBER() OVER (ORDER BY (COALESCE(SUM(pe.points), 0) + u.trust_score) DESC) as rank
+        FROM users u LEFT JOIN point_events pe ON pe.user_id = u.id
+        GROUP BY u.id, u.email, u.trust_score, u.shortcuts_added, u.validations_done
       )
-      SELECT * FROM ranked WHERE id = $1
+      (SELECT * FROM ranked WHERE id = $1)
       UNION ALL
       (SELECT * FROM ranked WHERE rank BETWEEN
         (SELECT rank - 2 FROM ranked WHERE id = $1) AND
-        (SELECT rank + 2 FROM ranked WHERE id = $1))
+        (SELECT rank + 2 FROM ranked WHERE id = $1) AND id != $1)
       ORDER BY rank`,
       [request.userData!.id]
     );

@@ -130,9 +130,11 @@ export const authApi = {
 };
 
 export const tracesApi = {
-  submit: (data: { geometry: object; started_at: string; ended_at: string; mode: string }) => api.post('/traces/', data),
+  submit: (data: { geometry: object; started_at: string; ended_at: string; mode: string; confidence?: number }) => api.post('/traces/', data),
+  batch: (traces: any[]) => api.post('/traces/batch', { traces }),
   mine: (limit = 20, offset = 0) => api.get(`/traces/mine?limit=${limit}&offset=${offset}`),
   anonymous: (data: { geometry: object; started_at: string; ended_at: string; mode: string }) => api.post('/traces/anonymous', data),
+  nearbyShortcuts: (lat: number, lon: number, radius = 100) => api.get(`/traces/nearby-shortcuts?lat=${lat}&lon=${lon}&radius=${radius}`),
 };
 
 export const routeApi = {
@@ -179,8 +181,10 @@ export const leaderboardApi = {
 
 export const shortcutsApi = {
   list: (bbox: string) => api.get(`/shortcuts/?bbox=${bbox}`),
-  create: (data: { geometry: object; name: string; time_saved_s: number }) => api.post('/shortcuts/', data),
-  validate: (id: string) => api.post(`/shortcuts/${id}/validate`),
+  get: (id: string) => api.get(`/shortcuts/${id}`),
+  create: (data: { geometry: object; name: string; tags?: string[] }) => api.post('/shortcuts/', data),
+  validate: (id: string, result: 'valid' | 'invalid' = 'valid') => api.post(`/shortcuts/${id}/validate`, { result }),
+  checkOverlap: (geometry: string) => api.get(`/shortcuts/check-overlap?geometry=${encodeURIComponent(geometry)}`),
   delete: (id: string) => api.delete(`/shortcuts/${id}`),
 };
 

@@ -16,10 +16,13 @@ import {
 import MapboxGL from '@rnmapbox/maps';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useLocation, useLocationTracking } from '../hooks/useLocation';
-import { pinsApi, heatmapApi, routeApi } from '../services/api';
+import { pinsApi, heatmapApi, routeApi, shortcutsApi } from '../services/api';
 import { Pin, HeatmapCell, Route } from '../types';
 import { colors, spacing, radii, fonts } from '../utils/theme';
 import HeatmapOverlay from '../components/HeatmapOverlay';
+import ShortcutRecorder from '../components/ShortcutRecorder';
+import ValidationPrompt from '../components/ValidationPrompt';
+import PointsPopup from '../components/PointsPopup';
 import { showSuccess, showInfo, showError } from '../utils/toast';
 
 import { MAPBOX_ACCESS_TOKEN } from '../config';
@@ -201,6 +204,27 @@ export default function MapScreen() {
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
 
+  // Shortcuts
+  const [shortcuts, setShortcuts] = useState<any[]>([]);
+  const [showShortcutRecorder, setShowShortcutRecorder] = useState(false);
+  const [shortcutRecording, setShortcutRecording] = useState(false);
+  const [shortcutDistance, setShortcutDistance] = useState(0);
+
+  // Validation
+  const [validationPrompt, setValidationPrompt] = useState<{
+    visible: boolean;
+    shortcutId: string;
+    shortcutName: string;
+    shortcutTags: string[];
+  }>({ visible: false, shortcutId: '', shortcutName: '', shortcutTags: [] });
+
+  // Points popup
+  const [pointsPopup, setPointsPopup] = useState<{
+    visible: boolean;
+    points: number;
+    reason: string;
+  }>({ visible: false, points: 0, reason: '' });
+
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -214,6 +238,13 @@ export default function MapScreen() {
     if (!showHeatmap) { setHeatmapCells([]); return; }
     heatmapApi.density('25.06,55.13,25.10,55.18').then(res => setHeatmapCells(res.data.cells || [])).catch(() => {});
   }, [showHeatmap]);
+
+  // Load shortcuts
+  useEffect(() => {
+    shortcutsApi.list('25.06,55.13,25.10,55.18')
+      .then(res => setShortcuts(res.data?.shortcuts || res.data || []))
+      .catch(() => {});
+  }, []);
 
   // Recording timer
   useEffect(() => {
@@ -376,6 +407,92 @@ export default function MapScreen() {
     if (location) cameraRef.current?.setCamera({ centerCoordinate: [location.longitude, location.latitude], zoomLevel: 16, animationDuration: 500 });
   }, [location]);
 
+  // Shortcut recording handlers
+  const handleAddShortcutPress = useCallback(() => {
+    setShortcutDistance(0);
+    setShortcutRecording(false);
+    setShowShortcutRecorder(true);
+  }, []);
+
+  const handleShortcutStartRecording = useCallback(() => {
+    setShortcutRecording(true);
+    tracker.start();
+  }, [tracker]);
+
+  const handleShortcutStopRecording = useCallback(() => {
+    setShortcutRecording(false);
+    setShortcutDistance(tracker.distance);
+    tracker.stop();
+  }, [tracker]);
+
+  const handleShortcutSave = useCallback(async (name: string, tags: string[]) => {
+    try {
+      const coords = tracker.path.map(p => [p.longitude, p.latitude]);
+      if (coords.length < 2) {
+        showError('Too Short', 'Walk a bit more to record a shortcut');
+        return;
+      }
+      const geometry = { type: 'LineString', coordinates: coords };
+      await shortcutsApi.create({ geometry, name, tags });
+      setShowShortcutRecorder(false);
+      setShortcutRecording(false);
+      setShortcutDistance(0);
+      setPointsPopup({ visible: true, points: 50, reason: 'Shortcut Added' });
+      // Reload shortcuts
+      shortcutsApi.list('25.06,55.13,25.10,55.18')
+        .then(res => setShortcuts(res.data?.shortcuts || res.data || []))
+        .catch(() => {});
+      showSuccess('Shortcut Saved', 'Thanks for contributing!');
+    } catch {
+      showError('Save Failed', 'Could not save the shortcut. Please try again.');
+    }
+  }, [tracker]);
+
+  const handleShortcutCancel = useCallback(() => {
+    if (shortcutRecording) tracker.stop();
+    setShowShortcutRecorder(false);
+    setShortcutRecording(false);
+    setShortcutDistance(0);
+  }, [shortcutRecording, tracker]);
+
+  // Validation handler
+  const handleValidation = useCallback(async (result: 'valid' | 'invalid') => {
+    try {
+      await shortcutsApi.validate(validationPrompt.shortcutId, result);
+      setValidationPrompt(prev => ({ ...prev, visible: false }));
+      if (result === 'valid') {
+        setPointsPopup({ visible: true, points: 10, reason: 'Validation' });
+      }
+    } catch {
+      showError('Validation Failed', 'Could not submit validation.');
+      setValidationPrompt(prev => ({ ...prev, visible: false }));
+    }
+  }, [validationPrompt.shortcutId]);
+
+  // Check for nearby shortcuts to validate periodically
+  useEffect(() => {
+    if (!isRecording || !location) return;
+    const interval = setInterval(() => {
+      if (!location || validationPrompt.visible) return;
+      shortcutsApi.list('25.06,55.13,25.10,55.18')
+        .then(res => {
+          const nearby = (res.data?.shortcuts || res.data || []).find(
+            (s: any) => s.status === 'pending' && s.id
+          );
+          if (nearby) {
+            setValidationPrompt({
+              visible: true,
+              shortcutId: String(nearby.id),
+              shortcutName: nearby.name || 'Unnamed Shortcut',
+              shortcutTags: nearby.tags || [],
+            });
+          }
+        })
+        .catch(() => {});
+    }, 30000); // check every 30 seconds
+    return () => clearInterval(interval);
+  }, [isRecording, location, validationPrompt.visible]);
+
   // GeoJSON
   const routeGeoJSON = useMemo(() => {
     if (!selectedRoute?.geometry?.coordinates?.length) return null;
@@ -396,6 +513,21 @@ export default function MapScreen() {
     })),
   }), [pins]);
 
+  const shortcutsGeoJSON = useMemo((): GeoJSON.FeatureCollection => ({
+    type: 'FeatureCollection',
+    features: shortcuts
+      .filter((s: any) => s.geometry?.coordinates)
+      .map((s: any) => ({
+        type: 'Feature' as const,
+        id: String(s.id),
+        geometry: s.geometry,
+        properties: {
+          status: s.status || 'pending',
+          color: s.status === 'verified' ? '#00F5A0' : s.status === 'flagged' ? '#EF4444' : '#F59E0B',
+        },
+      })),
+  }), [shortcuts]);
+
   const currentSpeed = useMemo(() => {
     if (!isRecording || recordSeconds === 0 || tracker.distance === 0) return 0;
     return tracker.distance / recordSeconds;
@@ -415,6 +547,29 @@ export default function MapScreen() {
         <MapboxGL.ShapeSource id="pins-source" shape={pinsGeoJSON}>
           <MapboxGL.CircleLayer id="pins-layer" style={{ circleRadius: 8, circleColor: ['get', 'color'], circleStrokeWidth: 2, circleStrokeColor: 'rgba(255,255,255,0.3)' }} />
         </MapboxGL.ShapeSource>
+        {/* Shortcuts on map */}
+        {shortcutsGeoJSON.features.length > 0 && (
+          <MapboxGL.ShapeSource id="shortcuts-source" shape={shortcutsGeoJSON}>
+            {/* Verified shortcuts: solid line */}
+            <MapboxGL.LineLayer
+              id="shortcuts-verified"
+              filter={['==', ['get', 'status'], 'verified']}
+              style={{ lineColor: '#00F5A0', lineWidth: 3, lineCap: 'round', lineJoin: 'round' }}
+            />
+            {/* Pending shortcuts: dashed yellow */}
+            <MapboxGL.LineLayer
+              id="shortcuts-pending"
+              filter={['==', ['get', 'status'], 'pending']}
+              style={{ lineColor: '#F59E0B', lineWidth: 3, lineCap: 'round', lineJoin: 'round', lineDasharray: [2, 2] }}
+            />
+            {/* Flagged shortcuts: dashed red */}
+            <MapboxGL.LineLayer
+              id="shortcuts-flagged"
+              filter={['==', ['get', 'status'], 'flagged']}
+              style={{ lineColor: '#EF4444', lineWidth: 3, lineCap: 'round', lineJoin: 'round', lineDasharray: [2, 2] }}
+            />
+          </MapboxGL.ShapeSource>
+        )}
         {showHeatmap && <HeatmapOverlay cells={heatmapCells} />}
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="route-source" shape={routeGeoJSON}>
@@ -566,7 +721,7 @@ export default function MapScreen() {
         <TouchableOpacity style={styles.sideBtn} onPress={handleMyLocation}>
           <Icon name="locate" size={20} color={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.sideBtn}>
+        <TouchableOpacity style={styles.sideBtn} onPress={handleAddShortcutPress}>
           <Icon name="add" size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
@@ -657,6 +812,34 @@ export default function MapScreen() {
           </View>
         </View>
       )}
+
+      {/* SHORTCUT RECORDER */}
+      <ShortcutRecorder
+        visible={showShortcutRecorder}
+        isRecording={shortcutRecording}
+        distance={shortcutRecording ? tracker.distance : shortcutDistance}
+        onStartRecording={handleShortcutStartRecording}
+        onStopRecording={handleShortcutStopRecording}
+        onSave={handleShortcutSave}
+        onCancel={handleShortcutCancel}
+      />
+
+      {/* VALIDATION PROMPT */}
+      <ValidationPrompt
+        visible={validationPrompt.visible}
+        shortcutName={validationPrompt.shortcutName}
+        shortcutTags={validationPrompt.shortcutTags}
+        onValidate={handleValidation}
+        onDismiss={() => setValidationPrompt(prev => ({ ...prev, visible: false }))}
+      />
+
+      {/* POINTS POPUP */}
+      <PointsPopup
+        visible={pointsPopup.visible}
+        points={pointsPopup.points}
+        reason={pointsPopup.reason}
+        onHide={() => setPointsPopup({ visible: false, points: 0, reason: '' })}
+      />
 
       {/* STOP MODAL */}
       <Modal visible={showStopModal} transparent animationType="fade">
