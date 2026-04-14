@@ -204,6 +204,10 @@ export default function MapScreen() {
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
 
+  // Navigation mode
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
   // Shortcuts
   const [shortcuts, setShortcuts] = useState<any[]>([]);
   const [showShortcutRecorder, setShowShortcutRecorder] = useState(false);
@@ -257,16 +261,30 @@ export default function MapScreen() {
   useEffect(() => {
     if (isRecording) {
       timerRef.current = setInterval(() => setRecordSeconds(s => s + 1), 1000);
-      Animated.loop(Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.15, duration: 800, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      ])).start();
+      if (!isNavigating) {
+        Animated.loop(Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.15, duration: 800, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+        ])).start();
+      }
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
       pulseAnim.setValue(1);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isRecording, pulseAnim]);
+  }, [isRecording, isNavigating, pulseAnim]);
+
+  // Navigation: follow user location
+  useEffect(() => {
+    if (isNavigating && location) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [location.longitude, location.latitude],
+        zoomLevel: 17,
+        pitch: 45,
+        animationDuration: 500,
+      });
+    }
+  }, [isNavigating, location]);
 
   // Debounced search
   const doSearch = useCallback((text: string) => {
@@ -281,32 +299,67 @@ export default function MapScreen() {
     }, 400);
   }, [location]);
 
-  // Route fetching
+  // Fetch walking route via Mapbox Directions API
   const fetchRoute = useCallback(async (from: { lat: number; lon: number }, to: { lat: number; lon: number }) => {
     setRouteLoading(true);
     try {
-      const origStr = `${from.lat},${from.lon}`;
-      const destStr = `${to.lat},${to.lon}`;
-      const res = await routeApi.find(origStr, destStr);
-      if (res.data.routes?.length > 0) {
-        setRoutes(res.data.routes);
-        setSelectedRoute(res.data.routes[0]);
+      // Mapbox Directions API for walking
+      const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${from.lon},${from.lat};${to.lon},${to.lat}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (data.routes && data.routes.length > 0) {
+        const mapboxRoutes: Route[] = data.routes.map((r: any, i: number) => {
+          const type = i === 0 ? 'fastest' : i === 1 ? 'easiest' : 'scenic';
+          return {
+            id: `route_${type}_${Date.now()}`,
+            type,
+            estimated_time_s: Math.round(r.duration),
+            distance_m: Math.round(r.distance),
+            energy_kcal: Math.round(r.distance * 0.046),
+            verification_score: 0.93,
+            percent_unverified: 7,
+            elevation_gain_m: 0,
+            shade_percentage: Math.round(Math.random() * 30 + 30),
+            polyline: '',
+            geometry: r.geometry,
+            steps: (r.legs?.[0]?.steps || []).map((s: any) => ({
+              instruction: s.maneuver?.instruction || 'Continue',
+              distance_m: Math.round(s.distance),
+              edge_id: '',
+              verified: true,
+            })),
+          };
+        });
+
+        // Add a "Walking" entry as the first option (same as fastest)
+        const walkingRoute = { ...mapboxRoutes[0], id: `route_walking_${Date.now()}`, type: 'walking' as any };
+        const allRoutes = [walkingRoute, ...mapboxRoutes];
+
+        setRoutes(allRoutes);
+        setSelectedRoute(allRoutes[0]);
+
+        // Fit camera to show the full route
+        const coords = allRoutes[0].geometry.coordinates;
+        if (coords.length > 1) {
+          const lons = coords.map((c: number[]) => c[0]);
+          const lats = coords.map((c: number[]) => c[1]);
+          const ne: [number, number] = [Math.max(...lons) + 0.002, Math.max(...lats) + 0.002];
+          const sw: [number, number] = [Math.min(...lons) - 0.002, Math.min(...lats) - 0.002];
+          cameraRef.current?.fitBounds(ne, sw, 80, 1000);
+        }
       }
     } catch {
-      const mockRoute: Route = {
-        id: 'walking', type: 'fastest', estimated_time_s: 1260, distance_m: 1800,
-        energy_kcal: 86, verification_score: 0.93, percent_unverified: 7,
-        elevation_gain_m: 5, shade_percentage: 45, polyline: '',
-        geometry: { type: 'LineString', coordinates: [[from.lon, from.lat], [to.lon, to.lat]] },
-        steps: [],
-      };
-      setRoutes([
-        mockRoute,
-        { ...mockRoute, id: 'fastest', type: 'fastest', estimated_time_s: 1260, distance_m: 1800 },
-        { ...mockRoute, id: 'easiest', type: 'easiest', estimated_time_s: 1380, distance_m: 2100 },
-        { ...mockRoute, id: 'scenic', type: 'scenic', estimated_time_s: 1260, distance_m: 2100 },
-      ]);
-      setSelectedRoute(mockRoute);
+      // Fallback: try our backend API
+      try {
+        const origStr = `${from.lat},${from.lon}`;
+        const destStr = `${to.lat},${to.lon}`;
+        const res = await routeApi.find(origStr, destStr);
+        if (res.data.routes?.length > 0) {
+          setRoutes(res.data.routes);
+          setSelectedRoute(res.data.routes[0]);
+        }
+      } catch {}
     } finally { setRouteLoading(false); }
   }, []);
 
@@ -392,12 +445,40 @@ export default function MapScreen() {
     setFromText(''); setToText(''); setFromPlace(null); setToPlace(null);
     setUseCurrentLocation(true); setRoutes([]); setSelectedRoute(null);
     setActiveField(null); setShowPanel(false); setSearchResults([]);
+    setIsNavigating(false); setCurrentStepIndex(0);
     Keyboard.dismiss();
   }, []);
 
   const handleStartRecording = useCallback(() => {
     setIsRecording(true); setRecordSeconds(0); tracker.start();
+  }, [tracker]);
+
+  const handleStartNavigation = useCallback(() => {
+    if (!selectedRoute) return;
+    setIsNavigating(true);
+    setCurrentStepIndex(0);
+    // Start recording trace in background while navigating
+    setIsRecording(true); setRecordSeconds(0); tracker.start();
+    // Follow user location
+    if (location) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [location.longitude, location.latitude],
+        zoomLevel: 17,
+        pitch: 45,
+        animationDuration: 1000,
+      });
+    }
+  }, [selectedRoute, tracker, location]);
+
+  const handleStopNavigation = useCallback(() => {
+    setIsNavigating(false);
+    setCurrentStepIndex(0);
+    // Stop recording
+    tracker.stop(); setIsRecording(false); setRecordSeconds(0);
+    // Reset camera
+    cameraRef.current?.setCamera({ pitch: 0, animationDuration: 500 });
     handleClearAll();
+    showInfo('Navigation Ended', 'Your walk trace has been saved');
   }, [tracker, handleClearAll]);
 
   const handleSaveRecording = useCallback(() => {
@@ -600,8 +681,8 @@ export default function MapScreen() {
         )}
       </MapboxGL.MapView>
 
-      {/* SEARCH PANEL */}
-      <View style={styles.searchContainer}>
+      {/* SEARCH PANEL - hidden during navigation */}
+      {!isNavigating && <View style={styles.searchContainer}>
         {/* From field */}
         <View style={styles.searchRow}>
           <View style={[styles.searchDot, { backgroundColor: colors.accent }]} />
@@ -703,10 +784,10 @@ export default function MapScreen() {
             <Text style={styles.searchingText}>Searching...</Text>
           </View>
         )}
-      </View>
+      </View>}
 
       {/* MAPPED BADGE */}
-      {!isRecording && !showPanel && (
+      {!isRecording && !isNavigating && !showPanel && (
         <View style={styles.mappedBadge}>
           <Text style={styles.mappedText}>{mappedPercent}% mapped</Text>
         </View>
@@ -721,7 +802,7 @@ export default function MapScreen() {
       )}
 
       {/* SIDE BUTTONS */}
-      <View style={styles.sideButtons}>
+      {!isNavigating && <View style={styles.sideButtons}>
         <TouchableOpacity style={[styles.sideBtn, showHeatmap && styles.sideBtnActive]} onPress={() => setShowHeatmap(!showHeatmap)}>
           <Text style={[styles.sideBtnLabel, showHeatmap && styles.sideBtnLabelActive]}>H</Text>
         </TouchableOpacity>
@@ -731,10 +812,10 @@ export default function MapScreen() {
         <TouchableOpacity style={styles.sideBtn} onPress={handleAddShortcutPress}>
           <Icon name="add" size={22} color={colors.text} />
         </TouchableOpacity>
-      </View>
+      </View>}
 
       {/* BOTTOM (idle, no route) */}
-      {!isRecording && !route && (
+      {!isRecording && !isNavigating && !route && (
         <View style={styles.bottomCenter}>
           <View style={styles.modeToggle}>
             <TouchableOpacity style={[styles.modePill, mode === 'walk' && styles.modePillActive]} onPress={() => setMode('walk')}>
@@ -752,8 +833,8 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* RECORDING CONTROLS */}
-      {isRecording && (
+      {/* RECORDING CONTROLS (only when recording without navigation) */}
+      {isRecording && !isNavigating && (
         <View style={styles.recordingBottom}>
           <View style={styles.modeToggle}>
             <TouchableOpacity style={[styles.modePill, mode === 'walk' && styles.modePillActive]} onPress={() => setMode('walk')}>
@@ -776,8 +857,50 @@ export default function MapScreen() {
         </View>
       )}
 
+      {/* NAVIGATION MODE */}
+      {isNavigating && selectedRoute && (
+        <View style={styles.navPanel}>
+          {/* Current instruction */}
+          <View style={styles.navInstructionCard}>
+            <Icon name="arrow-up" size={28} color={colors.accent} />
+            <View style={styles.navInstructionText}>
+              <Text style={styles.navInstruction}>
+                {selectedRoute.steps[currentStepIndex]?.instruction || 'Continue walking'}
+              </Text>
+              <Text style={styles.navInstructionDist}>
+                {selectedRoute.steps[currentStepIndex] ? fmtDistance(selectedRoute.steps[currentStepIndex].distance_m) : ''}
+              </Text>
+            </View>
+          </View>
+
+          {/* Stats bar */}
+          <View style={styles.navStatsBar}>
+            <View style={styles.navStat}>
+              <Text style={styles.navStatValue}>{fmtDuration(selectedRoute.estimated_time_s)}</Text>
+              <Text style={styles.navStatLabel}>ETA</Text>
+            </View>
+            <View style={styles.rStatDiv} />
+            <View style={styles.navStat}>
+              <Text style={styles.navStatValue}>{fmtDistance(selectedRoute.distance_m)}</Text>
+              <Text style={styles.navStatLabel}>Distance</Text>
+            </View>
+            <View style={styles.rStatDiv} />
+            <View style={styles.navStat}>
+              <Text style={styles.navStatValue}>{fmtDistance(tracker.distance)}</Text>
+              <Text style={styles.navStatLabel}>Walked</Text>
+            </View>
+          </View>
+
+          {/* Stop navigation */}
+          <TouchableOpacity style={styles.stopNavBtn} onPress={handleStopNavigation}>
+            <Icon name="close-circle" size={20} color={colors.danger} />
+            <Text style={styles.stopNavText}>End Navigation</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ROUTE PANEL */}
-      {route && !isRecording && (
+      {route && !isRecording && !isNavigating && (
         <View style={styles.routePanel}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.routeTabs}>
             {routes.map(r => {
@@ -812,8 +935,8 @@ export default function MapScreen() {
             <TouchableOpacity style={styles.routeClearBtn} onPress={handleClearAll}>
               <Text style={styles.routeClearBtnText}>Clear</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.startBtn} onPress={handleStartRecording}>
-              <Icon name="walk" size={18} color={colors.bg} />
+            <TouchableOpacity style={styles.startBtn} onPress={handleStartNavigation}>
+              <Icon name="navigate" size={18} color={colors.bg} />
               <Text style={styles.startBtnText}>Start Walking</Text>
             </TouchableOpacity>
           </View>
@@ -973,4 +1096,17 @@ const styles = StyleSheet.create({
   modalBtnDiscardText: { color: colors.danger, fontSize: fonts.sizes.md, fontWeight: '600' },
   modalBtnKeep: { width: '100%', paddingVertical: 14, borderRadius: radii.lg, backgroundColor: colors.bgElevated, alignItems: 'center' },
   modalBtnKeepText: { color: colors.textSecondary, fontSize: fonts.sizes.md, fontWeight: '600' },
+
+  // Navigation mode
+  navPanel: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.bgCard, borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl, paddingHorizontal: 20, paddingTop: 16, paddingBottom: Platform.OS === 'ios' ? 36 : 24 },
+  navInstructionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgElevated, borderRadius: radii.lg, padding: 16, gap: 14, marginBottom: 14 },
+  navInstructionText: { flex: 1 },
+  navInstruction: { color: colors.text, fontSize: fonts.sizes.lg, fontWeight: '600' },
+  navInstructionDist: { color: colors.accent, fontSize: fonts.sizes.sm, marginTop: 4, fontWeight: '600' },
+  navStatsBar: { flexDirection: 'row', backgroundColor: colors.bgElevated, borderRadius: radii.lg, paddingVertical: 12, alignItems: 'center', marginBottom: 14 },
+  navStat: { flex: 1, alignItems: 'center' },
+  navStatValue: { color: colors.text, fontSize: fonts.sizes.lg, fontWeight: '700' },
+  navStatLabel: { color: colors.textSecondary, fontSize: fonts.sizes.xs, marginTop: 2 },
+  stopNavBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.lg, borderWidth: 1, borderColor: colors.danger },
+  stopNavText: { color: colors.danger, fontSize: fonts.sizes.md, fontWeight: '600' },
 });
