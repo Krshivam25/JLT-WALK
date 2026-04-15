@@ -38,18 +38,18 @@ const PIN_COLORS: Record<string, string> = {
   tip: '#00F5A0', photo: '#3B82F6', entrance: '#8B5CF6', shortcut: '#00D9F5',
 };
 
-// Category shortcuts using Mapbox poi_category values
+// Category shortcuts — q = search text, poiCat = Mapbox canonical_id filter
 const CATEGORIES = [
-  { id: 'coffee', label: 'Coffee', icon: 'cafe-outline', poiCat: 'coffee_shop,cafe' },
-  { id: 'restaurant', label: 'Food', icon: 'restaurant-outline', poiCat: 'restaurant,fast_food' },
-  { id: 'gym', label: 'Gym', icon: 'barbell-outline', poiCat: 'gym,fitness_center' },
-  { id: 'mall', label: 'Mall', icon: 'cart-outline', poiCat: 'shopping_mall,shopping' },
-  { id: 'pharmacy', label: 'Pharmacy', icon: 'medkit-outline', poiCat: 'pharmacy' },
-  { id: 'atm', label: 'ATM', icon: 'card-outline', poiCat: 'atm,bank' },
-  { id: 'supermarket', label: 'Grocery', icon: 'basket-outline', poiCat: 'supermarket,grocery' },
-  { id: 'hotel', label: 'Hotel', icon: 'bed-outline', poiCat: 'hotel,lodging' },
-  { id: 'mosque', label: 'Mosque', icon: 'star-outline', poiCat: 'mosque,place_of_worship' },
-  { id: 'park', label: 'Park', icon: 'leaf-outline', poiCat: 'park,garden' },
+  { id: 'coffee', label: 'Coffee', icon: 'cafe-outline', q: 'coffee', poiCat: 'coffee_shop,cafe,coffee' },
+  { id: 'restaurant', label: 'Food', icon: 'restaurant-outline', q: 'restaurant', poiCat: 'restaurant,fast_food,food' },
+  { id: 'gym', label: 'Gym', icon: 'barbell-outline', q: 'gym', poiCat: 'fitness_center' },
+  { id: 'mall', label: 'Mall', icon: 'cart-outline', q: 'mall', poiCat: 'shopping_mall' },
+  { id: 'pharmacy', label: 'Pharmacy', icon: 'medkit-outline', q: 'pharmacy', poiCat: 'pharmacy' },
+  { id: 'atm', label: 'ATM', icon: 'card-outline', q: 'atm', poiCat: 'atm,bank' },
+  { id: 'supermarket', label: 'Grocery', icon: 'basket-outline', q: 'grocery', poiCat: 'supermarket,grocery' },
+  { id: 'hotel', label: 'Hotel', icon: 'bed-outline', q: 'hotel', poiCat: 'hotel,lodging' },
+  { id: 'mosque', label: 'Mosque', icon: 'star-outline', q: 'mosque', poiCat: 'mosque,place_of_worship' },
+  { id: 'park', label: 'Park', icon: 'leaf-outline', q: 'park', poiCat: 'park,garden' },
 ];
 
 interface SearchResult {
@@ -137,9 +137,10 @@ async function retrievePlace(mapboxId: string): Promise<{ lat: number; lon: numb
 }
 
 // Mapbox Search Box API - Category search
-async function searchCategory(category: string, proximity?: [number, number]): Promise<SearchResult[]> {
+async function searchCategory(searchText: string, poiCategory: string, proximity?: [number, number]): Promise<SearchResult[]> {
   const prox = proximity ? `${proximity[0]},${proximity[1]}` : '55.1475,25.075';
   const params = new URLSearchParams({
+    q: searchText,
     access_token: MAPBOX_TOKEN,
     session_token: getSessionToken(),
     proximity: prox,
@@ -148,8 +149,7 @@ async function searchCategory(category: string, proximity?: [number, number]): P
     language: 'en',
     limit: '8',
     types: 'poi',
-    poi_category: category,
-    q: category,
+    poi_category: poiCategory,
   });
   try {
     const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${params}`);
@@ -157,7 +157,7 @@ async function searchCategory(category: string, proximity?: [number, number]): P
     return (data.suggestions || []).map((s: any) => ({
       id: s.mapbox_id,
       name: s.name,
-      category: s.poi_category?.join(', ') || category,
+      category: s.poi_category?.join(', ') || searchText,
       address: s.full_address || s.place_formatted || '',
       lat: 0,
       lon: 0,
@@ -434,7 +434,7 @@ export default function MapScreen() {
     setSearching(true);
     setCategoryPins([]);
     const prox: [number, number] | undefined = location ? [location.longitude, location.latitude] : undefined;
-    const results = await searchCategory(cat.poiCat, prox);
+    const results = await searchCategory(cat.q, cat.poiCat, prox);
     setSearchResults(results);
     setSearching(false);
 
