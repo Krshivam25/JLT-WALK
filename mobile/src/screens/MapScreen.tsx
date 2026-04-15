@@ -659,24 +659,55 @@ export default function MapScreen() {
           </MapboxGL.ShapeSource>
         )}
         {showHeatmap && <HeatmapOverlay cells={heatmapCells} />}
+        {/* Route: glow outline + main line */}
         {routeGeoJSON && (
           <MapboxGL.ShapeSource id="route-source" shape={routeGeoJSON}>
-            <MapboxGL.LineLayer id="route-line" style={{ lineColor: colors.accent, lineWidth: 4, lineCap: 'round', lineJoin: 'round' }} />
+            <MapboxGL.LineLayer id="route-glow" belowLayerID="route-line"
+              style={{ lineColor: 'rgba(0, 245, 160, 0.2)', lineWidth: 16, lineCap: 'round', lineJoin: 'round', lineBlur: 8 }} />
+            <MapboxGL.LineLayer id="route-outline" belowLayerID="route-glow"
+              style={{ lineColor: 'rgba(0, 200, 130, 0.6)', lineWidth: 8, lineCap: 'round', lineJoin: 'round' }} />
+            <MapboxGL.LineLayer id="route-line"
+              style={{ lineColor: colors.accent, lineWidth: 5, lineCap: 'round', lineJoin: 'round' }} />
           </MapboxGL.ShapeSource>
         )}
+
+        {/* Recording path */}
         {recordingGeoJSON && (
           <MapboxGL.ShapeSource id="recording-source" shape={recordingGeoJSON}>
-            <MapboxGL.LineLayer id="recording-line" style={{ lineColor: colors.danger, lineWidth: 4, lineCap: 'round', lineJoin: 'round' }} />
+            <MapboxGL.LineLayer id="recording-glow"
+              style={{ lineColor: 'rgba(239, 68, 68, 0.3)', lineWidth: 12, lineCap: 'round', lineJoin: 'round', lineBlur: 6 }} />
+            <MapboxGL.LineLayer id="recording-line"
+              style={{ lineColor: '#EF4444', lineWidth: 4, lineCap: 'round', lineJoin: 'round' }} />
           </MapboxGL.ShapeSource>
         )}
-        {toPlace && (
-          <MapboxGL.MarkerView coordinate={[toPlace.lon, toPlace.lat]}>
-            <Icon name="location" size={32} color={colors.accent} />
+
+        {/* Start marker */}
+        {selectedRoute && selectedRoute.geometry.coordinates.length > 1 && (
+          <MapboxGL.MarkerView coordinate={selectedRoute.geometry.coordinates[0] as [number, number]} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.startMarker}>
+              <View style={styles.startMarkerInner} />
+            </View>
           </MapboxGL.MarkerView>
         )}
+
+        {/* Destination marker */}
+        {toPlace && (
+          <MapboxGL.MarkerView coordinate={[toPlace.lon, toPlace.lat]} anchor={{ x: 0.5, y: 1 }}>
+            <View style={styles.destMarkerWrap}>
+              <View style={styles.destMarkerPin}>
+                <Icon name="flag" size={16} color="#FFF" />
+              </View>
+              <View style={styles.destMarkerStem} />
+            </View>
+          </MapboxGL.MarkerView>
+        )}
+
+        {/* Custom start location marker */}
         {fromPlace && !useCurrentLocation && (
-          <MapboxGL.MarkerView coordinate={[fromPlace.lon, fromPlace.lat]}>
-            <Icon name="radio-button-on" size={20} color={colors.accent} />
+          <MapboxGL.MarkerView coordinate={[fromPlace.lon, fromPlace.lat]} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.startMarker}>
+              <View style={styles.startMarkerInner} />
+            </View>
           </MapboxGL.MarkerView>
         )}
       </MapboxGL.MapView>
@@ -858,46 +889,67 @@ export default function MapScreen() {
       )}
 
       {/* NAVIGATION MODE */}
-      {isNavigating && selectedRoute && (
-        <View style={styles.navPanel}>
-          {/* Current instruction */}
-          <View style={styles.navInstructionCard}>
-            <Icon name="arrow-up" size={28} color={colors.accent} />
-            <View style={styles.navInstructionText}>
-              <Text style={styles.navInstruction}>
-                {selectedRoute.steps[currentStepIndex]?.instruction || 'Continue walking'}
-              </Text>
-              <Text style={styles.navInstructionDist}>
-                {selectedRoute.steps[currentStepIndex] ? fmtDistance(selectedRoute.steps[currentStepIndex].distance_m) : ''}
-              </Text>
-            </View>
-          </View>
+      {isNavigating && selectedRoute && (() => {
+        const step = selectedRoute.steps[currentStepIndex];
+        const instr = step?.instruction || 'Follow the route';
+        const instrLower = instr.toLowerCase();
+        const dirIcon = instrLower.includes('left') ? 'arrow-back' : instrLower.includes('right') ? 'arrow-forward' : instrLower.includes('u-turn') ? 'return-down-back' : instrLower.includes('arrive') ? 'flag' : 'arrow-up';
+        const nextStep = selectedRoute.steps[currentStepIndex + 1];
+        const remaining = selectedRoute.distance_m - tracker.distance;
+        const remainingTime = remaining > 0 ? Math.round((remaining / selectedRoute.distance_m) * selectedRoute.estimated_time_s) : 0;
 
-          {/* Stats bar */}
-          <View style={styles.navStatsBar}>
-            <View style={styles.navStat}>
-              <Text style={styles.navStatValue}>{fmtDuration(selectedRoute.estimated_time_s)}</Text>
-              <Text style={styles.navStatLabel}>ETA</Text>
+        return (
+          <View style={styles.navPanel}>
+            {/* Direction banner */}
+            <View style={styles.navBanner}>
+              <View style={styles.navDirIcon}>
+                <Icon name={dirIcon} size={32} color={colors.bg} />
+              </View>
+              <View style={styles.navBannerText}>
+                <Text style={styles.navBannerInstr} numberOfLines={2}>{instr}</Text>
+                {step && <Text style={styles.navBannerDist}>{fmtDistance(step.distance_m)}</Text>}
+              </View>
             </View>
-            <View style={styles.rStatDiv} />
-            <View style={styles.navStat}>
-              <Text style={styles.navStatValue}>{fmtDistance(selectedRoute.distance_m)}</Text>
-              <Text style={styles.navStatLabel}>Distance</Text>
-            </View>
-            <View style={styles.rStatDiv} />
-            <View style={styles.navStat}>
-              <Text style={styles.navStatValue}>{fmtDistance(tracker.distance)}</Text>
-              <Text style={styles.navStatLabel}>Walked</Text>
-            </View>
-          </View>
 
-          {/* Stop navigation */}
-          <TouchableOpacity style={styles.stopNavBtn} onPress={handleStopNavigation}>
-            <Icon name="close-circle" size={20} color={colors.danger} />
-            <Text style={styles.stopNavText}>End Navigation</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+            {/* Next step preview */}
+            {nextStep && (
+              <View style={styles.navNextStep}>
+                <Text style={styles.navNextLabel}>Then</Text>
+                <Text style={styles.navNextInstr} numberOfLines={1}>{nextStep.instruction}</Text>
+              </View>
+            )}
+
+            {/* Stats */}
+            <View style={styles.navStatsBar}>
+              <View style={styles.navStat}>
+                <Text style={styles.navStatValue}>{fmtDuration(remainingTime)}</Text>
+                <Text style={styles.navStatLabel}>Remaining</Text>
+              </View>
+              <View style={styles.rStatDiv} />
+              <View style={styles.navStat}>
+                <Text style={styles.navStatValue}>{fmtDistance(remaining > 0 ? remaining : 0)}</Text>
+                <Text style={styles.navStatLabel}>Left</Text>
+              </View>
+              <View style={styles.rStatDiv} />
+              <View style={styles.navStat}>
+                <Text style={styles.navStatValue}>{fmtDistance(tracker.distance)}</Text>
+                <Text style={styles.navStatLabel}>Walked</Text>
+              </View>
+            </View>
+
+            {/* Progress bar */}
+            <View style={styles.navProgress}>
+              <View style={[styles.navProgressFill, { width: `${Math.min((tracker.distance / selectedRoute.distance_m) * 100, 100)}%` }]} />
+            </View>
+
+            {/* Stop */}
+            <TouchableOpacity style={styles.stopNavBtn} onPress={handleStopNavigation}>
+              <Icon name="close-circle" size={20} color={colors.danger} />
+              <Text style={styles.stopNavText}>End Navigation</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      })()}
 
       {/* ROUTE PANEL */}
       {route && !isRecording && !isNavigating && (
@@ -1097,16 +1149,29 @@ const styles = StyleSheet.create({
   modalBtnKeep: { width: '100%', paddingVertical: 14, borderRadius: radii.lg, backgroundColor: colors.bgElevated, alignItems: 'center' },
   modalBtnKeepText: { color: colors.textSecondary, fontSize: fonts.sizes.md, fontWeight: '600' },
 
+  // Route markers
+  startMarker: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#FFF', shadowColor: colors.accent, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
+  startMarkerInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF' },
+  destMarkerWrap: { alignItems: 'center' },
+  destMarkerPin: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.danger, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#FFF', shadowColor: colors.danger, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
+  destMarkerStem: { width: 3, height: 10, backgroundColor: '#FFF', borderBottomLeftRadius: 2, borderBottomRightRadius: 2 },
+
   // Navigation mode
-  navPanel: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.bgCard, borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl, paddingHorizontal: 20, paddingTop: 16, paddingBottom: Platform.OS === 'ios' ? 36 : 24 },
-  navInstructionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgElevated, borderRadius: radii.lg, padding: 16, gap: 14, marginBottom: 14 },
-  navInstructionText: { flex: 1 },
-  navInstruction: { color: colors.text, fontSize: fonts.sizes.lg, fontWeight: '600' },
-  navInstructionDist: { color: colors.accent, fontSize: fonts.sizes.sm, marginTop: 4, fontWeight: '600' },
-  navStatsBar: { flexDirection: 'row', backgroundColor: colors.bgElevated, borderRadius: radii.lg, paddingVertical: 12, alignItems: 'center', marginBottom: 14 },
+  navPanel: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: colors.bgCard, borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl, paddingHorizontal: 20, paddingTop: 0, paddingBottom: Platform.OS === 'ios' ? 36 : 24 },
+  navBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.accent, borderBottomLeftRadius: radii.lg, borderBottomRightRadius: radii.lg, marginHorizontal: -20, paddingHorizontal: 20, paddingVertical: 16, gap: 14 },
+  navDirIcon: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(0,0,0,0.2)', justifyContent: 'center', alignItems: 'center' },
+  navBannerText: { flex: 1 },
+  navBannerInstr: { color: colors.bg, fontSize: 18, fontWeight: '700' },
+  navBannerDist: { color: 'rgba(0,0,0,0.6)', fontSize: fonts.sizes.md, fontWeight: '600', marginTop: 2 },
+  navNextStep: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: colors.border },
+  navNextLabel: { color: colors.textMuted, fontSize: fonts.sizes.sm, fontWeight: '600' },
+  navNextInstr: { color: colors.textSecondary, fontSize: fonts.sizes.sm, flex: 1 },
+  navStatsBar: { flexDirection: 'row', paddingVertical: 14, alignItems: 'center' },
   navStat: { flex: 1, alignItems: 'center' },
   navStatValue: { color: colors.text, fontSize: fonts.sizes.lg, fontWeight: '700' },
   navStatLabel: { color: colors.textSecondary, fontSize: fonts.sizes.xs, marginTop: 2 },
+  navProgress: { height: 4, backgroundColor: colors.bgElevated, borderRadius: 2, marginBottom: 14 },
+  navProgressFill: { height: 4, backgroundColor: colors.accent, borderRadius: 2 },
   stopNavBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: radii.lg, borderWidth: 1, borderColor: colors.danger },
   stopNavText: { color: colors.danger, fontSize: fonts.sizes.md, fontWeight: '600' },
 });
