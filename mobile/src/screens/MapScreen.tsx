@@ -188,6 +188,7 @@ export default function MapScreen() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
+  const [categoryPins, setCategoryPins] = useState<SearchResult[]>([]);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Mode
@@ -391,11 +392,15 @@ export default function MapScreen() {
 
   const handleSelectResult = useCallback(async (result: SearchResult) => {
     setSearchResults([]);
+    setCategoryPins([]);
     Keyboard.dismiss();
 
-    // Retrieve coordinates from Mapbox
+    // Retrieve coordinates from Mapbox Search Box API
     const coords = await retrievePlace(result.id);
-    if (!coords) return;
+    if (!coords) {
+      showError('Location Error', 'Could not get coordinates for this place');
+      return;
+    }
 
     const resolved = { ...result, lat: coords.lat, lon: coords.lon };
 
@@ -425,12 +430,33 @@ export default function MapScreen() {
 
   const handleCategoryPress = useCallback(async (cat: typeof CATEGORIES[0]) => {
     setActiveField('to');
-    setToText(cat.label);
+    setToText('');
     setSearching(true);
+    setCategoryPins([]);
     const prox: [number, number] | undefined = location ? [location.longitude, location.latitude] : undefined;
     const results = await searchCategory(cat.poiCat, prox);
     setSearchResults(results);
     setSearching(false);
+
+    // Retrieve coordinates for all results to show on map
+    if (results.length > 0) {
+      const resolved: SearchResult[] = [];
+      for (const r of results) {
+        const coords = await retrievePlace(r.id);
+        if (coords) {
+          resolved.push({ ...r, lat: coords.lat, lon: coords.lon });
+        }
+      }
+      setCategoryPins(resolved);
+      // Fit camera to show all pins
+      if (resolved.length > 0) {
+        const lons = resolved.map(r => r.lon);
+        const lats = resolved.map(r => r.lat);
+        const ne: [number, number] = [Math.max(...lons) + 0.003, Math.max(...lats) + 0.003];
+        const sw: [number, number] = [Math.min(...lons) - 0.003, Math.min(...lats) - 0.003];
+        cameraRef.current?.fitBounds(ne, sw, 80, 1000);
+      }
+    }
   }, [location]);
 
   const handleUseCurrentLocation = useCallback(() => {
@@ -445,7 +471,7 @@ export default function MapScreen() {
     setFromText(''); setToText(''); setFromPlace(null); setToPlace(null);
     setUseCurrentLocation(true); setRoutes([]); setSelectedRoute(null);
     setActiveField(null); setShowPanel(false); setSearchResults([]);
-    setIsNavigating(false); setCurrentStepIndex(0);
+    setIsNavigating(false); setCurrentStepIndex(0); setCategoryPins([]);
     Keyboard.dismiss();
   }, []);
 
@@ -701,6 +727,19 @@ export default function MapScreen() {
             </View>
           </MapboxGL.MarkerView>
         )}
+
+        {/* Category search result pins - retrieve coords lazily and show */}
+        {categoryPins.length > 0 && categoryPins.map((pin, i) => {
+          // Only render if we have coordinates (non-zero)
+          if (pin.lat === 0 && pin.lon === 0) return null;
+          return (
+            <MapboxGL.MarkerView key={`cat-${i}`} coordinate={[pin.lon, pin.lat]} anchor={{ x: 0.5, y: 0.5 }}>
+              <TouchableOpacity onPress={() => handleSelectResult(pin)} style={styles.catPin}>
+                <Text style={styles.catPinText}>{pin.name.substring(0, 2).toUpperCase()}</Text>
+              </TouchableOpacity>
+            </MapboxGL.MarkerView>
+          );
+        })}
 
         {/* Custom start location marker */}
         {fromPlace && !useCurrentLocation && (
@@ -983,15 +1022,21 @@ export default function MapScreen() {
           </View>
           <Text style={styles.communityText}>Community-powered route</Text>
           <View style={styles.communityBar}><View style={[styles.communityBarFill, { width: `${route.verification_score * 100}%` }]} /></View>
+
+          {/* Two options: Follow route OR walk freely */}
           <View style={styles.routeActions}>
             <TouchableOpacity style={styles.routeClearBtn} onPress={handleClearAll}>
               <Text style={styles.routeClearBtnText}>Clear</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.startBtn} onPress={handleStartNavigation}>
               <Icon name="navigate" size={18} color={colors.bg} />
-              <Text style={styles.startBtnText}>Start Walking</Text>
+              <Text style={styles.startBtnText}>Follow Route</Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity style={styles.recordOwnBtn} onPress={() => { handleStartRecording(); }}>
+            <Icon name="radio-button-on" size={16} color={colors.accent} />
+            <Text style={styles.recordOwnText}>Walk & Record My Own Route</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1136,6 +1181,8 @@ const styles = StyleSheet.create({
   routeClearBtnText: { color: colors.textSecondary, fontSize: fonts.sizes.md, fontWeight: '600' },
   startBtn: { flex: 2, flexDirection: 'row', gap: 8, paddingVertical: 14, borderRadius: radii.lg, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   startBtnText: { color: colors.bg, fontSize: fonts.sizes.md, fontWeight: '700' },
+  recordOwnBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, marginTop: 8, borderRadius: radii.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated },
+  recordOwnText: { color: colors.accent, fontSize: fonts.sizes.sm, fontWeight: '600' },
 
   // Modal
   modalOverlay: { flex: 1, backgroundColor: colors.bgOverlay, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
@@ -1148,6 +1195,10 @@ const styles = StyleSheet.create({
   modalBtnDiscardText: { color: colors.danger, fontSize: fonts.sizes.md, fontWeight: '600' },
   modalBtnKeep: { width: '100%', paddingVertical: 14, borderRadius: radii.lg, backgroundColor: colors.bgElevated, alignItems: 'center' },
   modalBtnKeepText: { color: colors.textSecondary, fontSize: fonts.sizes.md, fontWeight: '600' },
+
+  // Category pins
+  catPin: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FFF', shadowColor: colors.accent, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
+  catPinText: { color: colors.bg, fontSize: 11, fontWeight: '800' },
 
   // Route markers
   startMarker: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#FFF', shadowColor: colors.accent, shadowOpacity: 0.5, shadowRadius: 6, elevation: 4 },
