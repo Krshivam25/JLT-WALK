@@ -154,7 +154,10 @@ export default async function routeRoutes(app: FastifyInstance) {
       buildRoute(dijkstra(e => e.timeCost * (2 - e.shade)), 'scenic', ts),
     ].filter(Boolean);
 
-    const result = { routes };
+    const avgCoverage = routes.length > 0
+      ? routes.reduce((sum, r) => sum + (r?.verification_score || 0), 0) / routes.length
+      : 0;
+    const result = { routes, coverage: avgCoverage, source: 'community' as const };
     await cacheSet(cacheKey, JSON.stringify(result), 120);
     reply.send(result);
   });

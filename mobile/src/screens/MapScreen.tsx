@@ -300,11 +300,44 @@ export default function MapScreen() {
     }, 400);
   }, [location]);
 
-  // Fetch walking route via Mapbox Directions API
+  // Fetch walking route — try backend (community) first, fall back to Mapbox
   const fetchRoute = useCallback(async (from: { lat: number; lon: number }, to: { lat: number; lon: number }) => {
     setRouteLoading(true);
+    const origStr = `${from.lat},${from.lon}`;
+    const destStr = `${to.lat},${to.lon}`;
+
+    let backendRoutes: Route[] = [];
+    let backendCoverage = 0;
+
+    // 1. Try backend first
     try {
-      // Mapbox Directions API for walking
+      const res = await routeApi.find(origStr, destStr);
+      if (res.data.routes?.length > 0) {
+        backendRoutes = res.data.routes.map((r: Route) => ({ ...r, source: 'community' as const }));
+        backendCoverage = res.data.coverage ?? 0;
+      }
+    } catch {}
+
+    // 2. If backend has good coverage, use community routes
+    if (backendRoutes.length > 0 && backendCoverage >= 0.6) {
+      setRoutes(backendRoutes);
+      setSelectedRoute(backendRoutes[0]);
+
+      // Fit camera to show the full route
+      const coords = backendRoutes[0].geometry.coordinates;
+      if (coords.length > 1) {
+        const lons = coords.map((c: number[]) => c[0]);
+        const lats = coords.map((c: number[]) => c[1]);
+        const ne: [number, number] = [Math.max(...lons) + 0.002, Math.max(...lats) + 0.002];
+        const sw: [number, number] = [Math.min(...lons) - 0.002, Math.min(...lats) - 0.002];
+        cameraRef.current?.fitBounds(ne, sw, 80, 1000);
+      }
+      setRouteLoading(false);
+      return;
+    }
+
+    // 3. Fallback: Mapbox Directions API
+    try {
       const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${from.lon},${from.lat};${to.lon},${to.lat}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
       const res = await fetch(url);
       const data = await res.json();
@@ -330,12 +363,14 @@ export default function MapScreen() {
               edge_id: '',
               verified: true,
             })),
+            source: 'standard' as const,
           };
         });
 
         // Add a "Walking" entry as the first option (same as fastest)
         const walkingRoute = { ...mapboxRoutes[0], id: `route_walking_${Date.now()}`, type: 'walking' as any };
-        const allRoutes = [walkingRoute, ...mapboxRoutes];
+        // Also append any low-coverage backend routes
+        const allRoutes = [walkingRoute, ...mapboxRoutes, ...backendRoutes];
 
         setRoutes(allRoutes);
         setSelectedRoute(allRoutes[0]);
@@ -350,18 +385,8 @@ export default function MapScreen() {
           cameraRef.current?.fitBounds(ne, sw, 80, 1000);
         }
       }
-    } catch {
-      // Fallback: try our backend API
-      try {
-        const origStr = `${from.lat},${from.lon}`;
-        const destStr = `${to.lat},${to.lon}`;
-        const res = await routeApi.find(origStr, destStr);
-        if (res.data.routes?.length > 0) {
-          setRoutes(res.data.routes);
-          setSelectedRoute(res.data.routes[0]);
-        }
-      } catch {}
-    } finally { setRouteLoading(false); }
+    } catch {}
+    setRouteLoading(false);
   }, []);
 
   // When both from and to are set, fetch route
@@ -1020,7 +1045,9 @@ export default function MapScreen() {
               <Text style={styles.routeStat}>{Math.round(route.verification_score * 100)}% verified</Text>
             </View>
           </View>
-          <Text style={styles.communityText}>Community-powered route</Text>
+          <Text style={[styles.communityText, route.source === 'standard' && { color: '#999' }]}>
+            {route.source === 'standard' ? 'Standard route via Mapbox' : 'Community-powered route'}
+          </Text>
           <View style={styles.communityBar}><View style={[styles.communityBarFill, { width: `${route.verification_score * 100}%` }]} /></View>
 
           {/* Two options: Follow route OR walk freely */}

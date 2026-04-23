@@ -29,8 +29,16 @@ export default function RouteCard({ route, selected, onPress }: Props) {
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <View style={[styles.pill, { backgroundColor: cfg.color }]}>
-        <Text style={styles.pillText}>{cfg.label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={[styles.pill, { backgroundColor: cfg.color }]}>
+          <Text style={styles.pillText}>{cfg.label}</Text>
+        </View>
+        {route.source === 'community' && (
+          <Text style={{ color: '#00F5A0', fontSize: 9, fontWeight: '600' }}>Community</Text>
+        )}
+        {route.source === 'standard' && (
+          <Text style={{ color: '#999', fontSize: 9, fontWeight: '600' }}>Standard</Text>
+        )}
       </View>
       <Text style={styles.stats}>
         {formatDuration(route.estimated_time_s)} · {formatDistance(route.distance_m)}

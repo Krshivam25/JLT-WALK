@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { query } from '../../config/database.js';
 import { authenticate, optionalAuth } from '../../middleware/auth.js';
 import { traceSchema } from '../../utils/validation.js';
+import { processTrace } from '../../services/map-matching.js';
 
 export default async function traceRoutes(app: FastifyInstance) {
   // Authenticated trace upload — awards points per 100m walked
@@ -44,6 +45,9 @@ export default async function traceRoutes(app: FastifyInstance) {
       await query('UPDATE users SET points = points + $1, trust_score = LEAST(trust_score + 0.5, 100) WHERE id = $2',
         [pointsEarned, request.userData!.id]);
     }
+    // Map-match trace to edges (self-learning pipeline)
+    try { await processTrace(result.rows[0].id); } catch { /* map-matching is best-effort */ }
+
     reply.code(201).send({ ...result.rows[0], points_earned: pointsEarned });
   });
 
@@ -70,11 +74,13 @@ export default async function traceRoutes(app: FastifyInstance) {
         const speed = durationS > 0 ? distance / durationS : 0;
         if (speed > 5) continue; // skip flagged
 
-        await query(
+        const insertResult = await query(
           `INSERT INTO traces (user_id, raw_geojson, point_count, mode, duration_s, distance_m, confidence_score)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
           [request.userData!.id, geojson, coords.length, parsed.mode, durationS, distance, (t as any).confidence ?? 1.0]
         );
+        // Map-match trace to edges (self-learning pipeline)
+        try { await processTrace(insertResult.rows[0].id); } catch { /* map-matching is best-effort */ }
         const pts = 10 + Math.floor(distance / 100);
         totalPoints += pts;
         savedCount++;
@@ -89,6 +95,13 @@ export default async function traceRoutes(app: FastifyInstance) {
     }
 
     reply.send({ saved: savedCount, points_earned: totalPoints });
+  });
+
+  // POST /traces/process-unmatched — backfill unprocessed traces
+  app.post('/process-unmatched', { preHandler: [authenticate] }, async (request, reply) => {
+    const { processUnmatchedTraces } = await import('../../services/map-matching.js');
+    const count = await processUnmatchedTraces(100);
+    reply.send({ processed: count });
   });
 
   // Get my traces

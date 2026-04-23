@@ -139,6 +139,37 @@ export default async function shortcutRoutes(app: FastifyInstance) {
         [newTrustScore, newValidationCount, newStatus, shortcutId]
       );
 
+      // Auto-create edge from verified shortcut
+      if (newStatus === 'verified' && sc.rows[0].status !== 'verified') {
+        try {
+          const shortcutData = await query(
+            `SELECT ST_AsText(geometry) as geom_text, ST_AsGeoJSON(geometry)::json as geom_json, length_m, tags
+             FROM shortcuts WHERE id = $1`, [shortcutId]
+          );
+          const sd = shortcutData.rows[0];
+          if (sd) {
+            // Check no edge already exists within 10m of this shortcut
+            const existing = await query(
+              `SELECT edge_id FROM edges
+               WHERE ST_DWithin(geometry::geography, ST_GeomFromGeoJSON($1)::geography, 10)
+               LIMIT 1`, [JSON.stringify(sd.geom_json)]
+            );
+            if (!existing.rows[0]) {
+              const tags = sd.tags || [];
+              const stairsFlag = tags.includes('stairs');
+              const shadeScore = tags.includes('shaded') ? 0.7 : 0.3;
+              const newEdge = await query(
+                `INSERT INTO edges (geometry, length_m, stairs_flag, shade_score, static_estimated_time, source)
+                 VALUES (ST_GeomFromGeoJSON($1), $2, $3, $4, $5, 'shortcut')
+                 RETURNING edge_id`,
+                [JSON.stringify(sd.geom_json), sd.length_m, stairsFlag, shadeScore, sd.length_m / 1.4]
+              );
+              await query('UPDATE shortcuts SET edge_id = $1 WHERE id = $2', [newEdge.rows[0].edge_id, shortcutId]);
+            }
+          }
+        } catch (e) { /* log but don't fail validation */ }
+      }
+
       // Points for validator
       const isFirstValidator = sc.rows[0].validation_count === 0;
       let validatorPoints = isValid ? 10 : 5; // points for validating

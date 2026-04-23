@@ -80,6 +80,7 @@ export interface Route {
   polyline: string;
   geometry: GeoJSONLineString;
   steps: RouteStep[];
+  source?: 'community' | 'standard';
 }
 
 export interface RouteStep {
